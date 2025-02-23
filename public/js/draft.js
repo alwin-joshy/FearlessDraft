@@ -1,13 +1,17 @@
 const socket = io();
-const patch = '15.2.1'
+const patch = '15.4.1'
 const baseUrl = `https://ddragon.leagueoflegends.com/cdn/${patch}`
 let champions = null;
 let currPick = 0;
 let matchNumber = 1;
 const preloadedImages = {};
 const preloadedIcons = {};
+const championListIcons = new Array();
 let usedChamps = new Set();
 let fearlessChamps = new Set();
+let prevBlueSideBans = new Set();
+let prevRedSideBans = new Set();
+let bannedChamps = new Set(["Katarina"]);
 let timerInterval = null;
 let timeLeft = 30;
 let side = null
@@ -67,15 +71,15 @@ async function loadChamps() { //preload champion grid images
 
 function preloadChampionImages() { //preload pick images
 	Object.keys(champions).forEach(championKey => {
-        if(championKey == 0){ //none placeholder icon
-            const championImage = new Image();
-            const championIcon = new Image();
-            championImage.src = '/img/placeholder.png';
-            championIcon.src = '/img/placeholder.png';
-            preloadedImages['none'] = championImage;
-            preloadedIcons['none'] = championIcon;
-            return;
-        }
+		if(championKey == 0){ //none placeholder icon
+			const championImage = new Image();
+			const championIcon = new Image();
+			championImage.src = '/img/placeholder.png';
+			championIcon.src = '/img/placeholder.png';
+			preloadedImages['none'] = championImage;
+			preloadedIcons['none'] = championIcon;
+			    return;
+		}
 		const champion = champions[championKey];
 		const championImage = new Image();
 		const championIcon = new Image();
@@ -83,9 +87,9 @@ function preloadChampionImages() { //preload pick images
 			championImage.src = `https://ddragon.leagueoflegends.com/cdn/img/champion/centered/FiddleSticks_0.jpg`;
 			championIcon.src = `${baseUrl}/img/champion/Fiddlesticks.png`;
 		} else if(champion.id === 'Wukong'){
-            championImage.src = `https://ddragon.leagueoflegends.com/cdn/img/champion/centered/MonkeyKing_0.jpg`;
-            championIcon.src = `${baseUrl}/img/champion/MonkeyKing.png`;
-        } else {
+			championImage.src = `https://ddragon.leagueoflegends.com/cdn/img/champion/centered/MonkeyKing_0.jpg`;
+			championIcon.src = `${baseUrl}/img/champion/MonkeyKing.png`;
+		} else {
 			championImage.src = `https://ddragon.leagueoflegends.com/cdn/img/champion/centered/${champion.id}_0.jpg`;
 			championIcon.src = `${baseUrl}/img/champion/${champion.id}.png`;
 		}
@@ -148,59 +152,106 @@ function getCurrSlot() { //get current pick in draft
 	}
 }
 
-function displayChampions(champions) { //display champion grid
+function handlePrevBan(championName, enable) {
+	championKey = champions.findIndex((x) => x.id == championName);
+
+	console.log(champions[championKey])
+	if (enable) {
+		console.log("just work man " + championKey);
+		championListIcons[championKey].classList.add('used');
+		championListIcons[championKey].style.filter = 'grayscale(100%)';
+		championListIcons[championKey].removeEventListener('click', () => {});	
+
+	} else {
+		championListIcons[championKey].classList.remove('used');
+		championListIcons[championKey].classList.filter = 'grayscale(0%)';
+		championListIcons[championKey].addEventListener('click', championIconListener);
+	}
+}
+
+function updateSemiFearlessBans() {
+	const currSlot = getCurrSlot();
+	var enable = false;
+	if (currSlot[1] == 'B') {
+		enable = true;
+	}
+	console.log(currSlot);	
+	console.log(side);	
+	console.log(enable);	
+
+	if (side === 'B')  {
+		prevBlueSideBans.forEach(championKey => {
+			handlePrevBan(championKey, enable);
+		});
+	} else if (side == 'R') {
+		prevRedSideBans.forEach(championKey => {
+			handlePrevBan(championKey, enable);
+		});	
+	}
+}
+
+function championIconListener(championKey, champion) {
+	const currSlot = getCurrSlot();
+	if (currSlot === "done") {
+		return;
+	}
+	if (currSlot[0] != side) {
+		return;
+	}
+	if (currSlot[1] === 'B') { //ban
+		let banSlot = document.querySelector(`#blue-bans .ban-slot:nth-child(${currSlot[2]})`);
+		if (currSlot[0] === 'R') { //red side ban
+			banSlot = document.querySelector(`#red-bans .ban-slot:nth-child(${6-currSlot[2]})`);
+		}
+		const banImage = banSlot.querySelector('img');
+		banImage.src = preloadedIcons[champion.id].src;
+	} else { //pick
+		let pickSlot = document.querySelector(`#blue-picks .pick-slot:nth-child(${currSlot[2]})`);
+		if (currSlot[0] === 'R') { //red side ban
+			pickSlot = document.querySelector(`#red-picks .pick-slot:nth-child(${currSlot[2]})`);
+		}
+		const pickImage = pickSlot.querySelector('img');
+		pickImage.src = preloadedImages[champion.id].src;
+		addChampionNameText(pickSlot, champion.id);
+	}
+	if (selectedChampion) {
+		selectedChampion.classList.remove('selected');
+	}
+	  // Add the 'selected' class to the clicked champion
+	championListIcons[championKey].classList.add('selected');
+	selectedChampion = championListIcons[championKey];
+	socket.emit('hover', {draftId, side: side, champion: champion.id});
+	confirmButton.disabled = false;
+}
+
+function displayChampions(champions, reset) { //display champion grid
 	championGrid.innerHTML = '';
 	Object.keys(champions).forEach(championKey => {
 		const champion = champions[championKey];
-		const championIcon = document.createElement('img');
-		championIcon.src = preloadedIcons[champion.id].src;
-		championIcon.alt = champion.id;
-		championIcon.classList.add('champion-icon');
-        if(champion.id === 'none'){ //placeholder image for none pick
-            championIcon.style.objectFit = 'cover';
-            championIcon.style.objectPosition = 'center';
-        }
-		if (champion.id !== 'none' && (usedChamps.has(champion.id) || fearlessChamps.has(champion.id))) {
-			championIcon.classList.add('used');
-			championIcon.style.filter = 'grayscale(100%)';
-            //remove event listener
-            championIcon.removeEventListener('click', () => {});
-		} else {
-			championIcon.addEventListener('click', () => {
-				const currSlot = getCurrSlot();
-				if (currSlot === "done") {
-					return;
-				}
-				if (currSlot[0] != side) {
-					return;
-				}
-				if (currSlot[1] === 'B') { //ban
-					let banSlot = document.querySelector(`#blue-bans .ban-slot:nth-child(${currSlot[2]})`);
-					if (currSlot[0] === 'R') { //red side ban
-						banSlot = document.querySelector(`#red-bans .ban-slot:nth-child(${6-currSlot[2]})`);
-					}
-					const banImage = banSlot.querySelector('img');
-					banImage.src = preloadedIcons[champion.id].src;
-				} else { //pick
-					let pickSlot = document.querySelector(`#blue-picks .pick-slot:nth-child(${currSlot[2]})`);
-					if (currSlot[0] === 'R') { //red side ban
-						pickSlot = document.querySelector(`#red-picks .pick-slot:nth-child(${currSlot[2]})`);
-					}
-					const pickImage = pickSlot.querySelector('img');
-					pickImage.src = preloadedImages[champion.id].src;
-                    addChampionNameText(pickSlot, champion.id);
-				}
-                if (selectedChampion) {
-                    selectedChampion.classList.remove('selected');
-                }
-                  // Add the 'selected' class to the clicked champion
-                championIcon.classList.add('selected');
-				selectedChampion = championIcon;
-                socket.emit('hover', {draftId, side: side, champion: champion.id});
-				confirmButton.disabled = false;
+
+		if (!championListIcons[championKey] || reset) {
+			championListIcons[championKey] = document.createElement('img');
+			championListIcons[championKey].src = preloadedIcons[champion.id].src;
+			championListIcons[championKey].alt = champion.id;
+			championListIcons[championKey].classList.add('champion-icon');
+			if(champion.id === 'none'){ //placeholder image for none pick
+				championListIcons[championKey].style.objectFit = 'cover';
+				championListIcons[championKey].objectPosition = 'center';
+			}
+		}
+
+		if (champion.id !== 'none' && (usedChamps.has(champion.id) || fearlessChamps.has(champion.id) || bannedChamps.has(champion.id))) {
+			championListIcons[championKey].classList.add('used');
+			championListIcons[championKey].style.filter = 'grayscale(100%)';
+			//remove event listener
+			championListIcons[championKey].removeEventListener('click', () => {});
+		} else if (side == 'B' && !prevBlueSideBans.has(champion.id) || side == 'R' && !prevRedSideBans.has(champion.id)) {
+			console.log(champion.id)
+			championListIcons[championKey].addEventListener('click', () => {
+				championIconListener(championKey, champion)
 			});
 		}
-		championGrid.appendChild(championIcon);
+		championGrid.appendChild(championListIcons[championKey]);
 	});
 }
 
@@ -211,7 +262,7 @@ function filterChampions() { //filter champions based on search and role
 		const matchesSearch = champion.id.toLowerCase().includes(searchTerm);
 		return matchesRole && matchesSearch;
 	});
-	displayChampions(filteredChampions);
+	displayChampions(filteredChampions, false);
 }
 
 roleIcons.forEach(icon => {
@@ -408,6 +459,7 @@ function lockChamp() { //lock in champ
     selectedRole = '';
     roleIcons.forEach(icon => icon.classList.remove('active'));
     filterChampions();
+	updateSemiFearlessBans();
 	if (currPick <= 19) {
 		colorBorder();
 		startTimer();
@@ -430,7 +482,8 @@ function startDraft() {
 	confirmButton.textContent = 'Lock In';
 	switchSidesButton.style.display = 'none';
     finishSeriesButton.style.display = 'none';
-	displayChampions(champions);
+	displayChampions(champions, true);
+	updateSemiFearlessBans();
 	colorBorder();
 	startTimer();
 }
@@ -567,12 +620,15 @@ socket.on('startDraft', (data) => { //starts draft
 	draftStarted = data.started;
 	blueReady = data.blueReady;
 	redReady = data.redReady;
+	prevBlueSideBans = new Set(data.prevBlueSideBans);
+	prevRedSideBans = new Set(data.prevRedSideBans);
 	fearlessChamps = new Set(data.fearlessBans);
 	matchNumber = data.matchNumber;
 	usedChamps = new Set();
 	updateFearlessBanSlots();
     displayTimer(data.timerEnabled);
 	fearlessBan(data.fearlessBans);
+	updateSemiFearlessBans();
 	startDraft();
 });
 
@@ -595,10 +651,13 @@ socket.on('draftState', (data) => { //updates screen when page loaded with draft
 	fearlessChamps = new Set(data.fearlessBans);
 	matchNumber = data.matchNumber;
 	sideSwapped = data.sideSwapped;
+	prevBlueSideBans = new Set(data.prevBlueSideBans);
+	prevRedSideBans = new Set(data.prevRedSideBans);
     displayTimer(data.timerEnabled);
 	updateSide(sideSwapped, data.blueTeamName, data.redTeamName, true);
 	updateFearlessBanSlots();
 	fearlessBan(data.fearlessBans);
+	updateSemiFearlessBans();
 	newPick(picks);
 	if (picks.length === 20) {
 		currPick = 0;
@@ -723,7 +782,7 @@ socket.on('showDraftResponse', (data) => {
 document.addEventListener('DOMContentLoaded', async () => {
 	await loadChamps();
 	preloadChampionImages();
-	displayChampions(champions);
+	displayChampions(champions, true);
 	socket.emit('joinDraft', draftId);
 	socket.emit('getData', draftId);
 	if (side === 'S') {

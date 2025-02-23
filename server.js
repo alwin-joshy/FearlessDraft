@@ -12,8 +12,8 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIO(server);
 const cache = new NodeCache({ stdTTL: 86400 }); // Cache for 1 day
-const domain = 'https://www.fearlessdraft.net';
-// const domain = 'http://localhost:3333';
+// const domain = 'https://www.fearlessdraft.net';
+const domain = 'http://localhost:3333';
 
 const currStates = {};
 
@@ -32,7 +32,8 @@ app.get('/', (req, res) => {
 
 const mongoUser = process.env.mongoUser;
 const mongoPass = process.env.mongoPass;
-const uri = `mongodb+srv://${mongoUser}:${mongoPass}@fearlessdraft.roz4r.mongodb.net/?retryWrites=true&w=majority&appName=FearlessDraft`;
+const uri = `mongodb+srv://${mongoUser}:${mongoPass}${process.env.uri}`
+
 const clientOptions = {
 	serverApi: {
 		version: '1',
@@ -62,6 +63,8 @@ const draftSchema = new mongoose.Schema({
 	matchNumber: Number,
 	blueTeamName: String,
 	redTeamName: String,
+    prevBlueSideBans: [String],
+    prevRedSideBans: [String],
     date: {
         type: Date,
         default: Date.now
@@ -71,7 +74,7 @@ const draftSchema = new mongoose.Schema({
 const Draft = mongoose.model('Draft', draftSchema);
 setInterval(checkFinishedDrafts, 5 * 1000 * 60); //check every 5 minutes to see if drafts are finished
 
-async function saveDraft(draftId, picks, fearlessBans, matchNumber, blueTeamName, redTeamName) {
+async function saveDraft(draftId, picks, fearlessBans, matchNumber, blueTeamName, redTeamName, prevBlueSideBans, prevRedSideBans) {
 	try {
 		if (mongoose.connection.readyState !== 1) {
 			throw new Error("MongoDB connection is not established");
@@ -83,6 +86,8 @@ async function saveDraft(draftId, picks, fearlessBans, matchNumber, blueTeamName
 			matchNumber,
 			blueTeamName,
 			redTeamName,
+            prevBlueSideBans,
+            prevRedSideBans,
             date: Date.now()
 		});
 		await draft.save();
@@ -188,6 +193,8 @@ app.post('/create-draft', (req, res) => {
             redReady: false,
             picks: [],
             fearlessBans: [],
+            prevBlueSideBans: [],
+            prevRedSideBans: [],
             timer: null,
             started: false,
             matchNumber: 1,
@@ -238,6 +245,12 @@ io.on('connection', (socket) => {
             if (currStates[draftId].blueReady && currStates[draftId].redReady) {
                 if (!currStates[draftId].fearlessBans) {
                     currStates[draftId].fearlessBans = []
+                }
+                if (!currStates[draftId].prevBlueSideBans) {
+                    currStates[draftId].prevBlueSideBans = []
+                }
+                if (!currStates[draftId].prevRedSideBans) {
+                    currStates[draftId].prevRedSideBans = []
                 }
                 currStates[draftId].fearlessBans = currStates[draftId].fearlessBans.concat(currStates[draftId].picks.slice(6, 12)).concat(currStates[draftId].picks.slice(16, 20));
                 currStates[draftId].picks = []
@@ -304,6 +317,9 @@ io.on('connection', (socket) => {
                 blueTeamName: currStates[draftId].blueTeamName,
                 timerEnabled: currStates[draftId].timerEnabled,
                 redTeamName: currStates[draftId].redTeamName
+                redTeamName: currStates[draftId].redTeamName,
+                prevBlueSideBans: currStates[draftId].prevBlueSideBans, 
+                prevRedSideBans: currStates[draftId].prevRedSideBans, 
             };
             socket.emit('draftState', data);
         } catch (error) {
@@ -349,12 +365,15 @@ io.on('connection', (socket) => {
             currStates[draftId].blueReady = false;
             currStates[draftId].redReady = false;
             currStates[draftId].started = false;
-            saveDraft(draftId, currStates[draftId].picks, currStates[draftId].fearlessBans, currStates[draftId].matchNumber, currStates[draftId].blueTeamName, currStates[draftId].redTeamName);
+            saveDraft(draftId, currStates[draftId].picks, currStates[draftId].fearlessBans, currStates[draftId].matchNumber, currStates[draftId].blueTeamName, currStates[draftId].redTeamName, currStates[draftId].prevBlueSideBans, currStates[draftId].prevRedSideBans);
             currStates[draftId].matchNumber++;
             currStates[draftId].lastActivity = Date.now();
+            currStates[draftId].prevBlueSideBans = [currStates[draftId].picks[0], currStates[draftId].picks[2], currStates[draftId].picks[4],currStates[draftId].picks[13], currStates[draftId].picks[15]];
+            currStates[draftId].prevRedSideBans = [currStates[draftId].picks[1], currStates[draftId].picks[3], currStates[draftId].picks[5],currStates[draftId].picks[12], currStates[draftId].picks[14]];
             if (currStates[draftId].matchNumber > 5) { //5 games total
                 currStates[draftId].finished = true;
             }
+
             io.to(draftId).emit('showNextGameButton', currStates[draftId]);
         } catch (error) {
             log(`Error ending draft: ${error.message}`);
@@ -368,6 +387,9 @@ io.on('connection', (socket) => {
                 currStates[draftId].sideSwapped = !currStates[draftId].sideSwapped;
                 currStates[draftId].blueReady = false;
                 currStates[draftId].redReady = false;
+                const tmp = currStates[draftId].prevBlueSideBans;
+                currStates[draftId].prevBlueSideBans = currStates[draftId].prevRedSideBans;
+                currStates[draftId].prevRedSideBans = tmp;
                 if (currStates[draftId].blueTeamName === 'Blue' || currStates[draftId].redTeamName === 'Red') {
                     io.to(draftId).emit('switchSidesResponse', currStates[draftId]);
                     return;
@@ -404,6 +426,8 @@ io.on('connection', (socket) => {
 					matchNumber: draft.matchNumber,
 					blueTeamName: draft.blueTeamName,
 					redTeamName: draft.redTeamName,
+                    prevRedSideBans: draft.prevRedSideBans,
+                    prevBlueSideBans: draft.prevBlueSideBans,
 				}
 				socket.emit('showDraftResponse', draftData);
 			} else {
