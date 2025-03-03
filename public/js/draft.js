@@ -11,7 +11,7 @@ let usedChamps = new Set();
 let fearlessChamps = new Set();
 let prevBlueSideBans = new Set();
 let prevRedSideBans = new Set();
-let bannedChamps = new Set(["Katarina"]);
+let bannedChamps = new Set(["Katarina", "Mel"]);
 let timerInterval = null;
 let timeLeft = 30;
 let side = null
@@ -262,7 +262,7 @@ function filterChampions() { //filter champions based on search and role
 		const matchesSearch = champion.id.toLowerCase().includes(searchTerm);
 		return matchesRole && matchesSearch;
 	});
-	displayChampions(filteredChampions, false);
+	displayChampions(filteredChampions, true);
 }
 
 roleIcons.forEach(icon => {
